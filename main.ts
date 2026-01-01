@@ -1,147 +1,310 @@
+// Imports Obsidian (API plugin, éditeur, markdown, etc.)
 import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { toKana, isRomaji } from 'wanakana';
 
-// Remember to rename these classes and interfaces!
+// Wanakana → conversion romaji → kana
+import { toKana, isRomaji, toHiragana, toKatakana } from 'wanakana';
 
-interface MyPluginSettings {
-	mySetting: string;
-}
+// CodeMirror → live preview custom
+import { Decoration, EditorView, ViewPlugin, ViewUpdate, WidgetType } from "@codemirror/view";
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+// =======================
+// Définition des balises
+// =======================
+
+// Hiragana
+const openbalisehg = "{hg}"
+const endbalisehg = "{/hg}"
+
+// Katakana
+const openbalisekk = "{kk}"
+const endbalisekk = "{/kk}"
+
+// Kana auto (hiragana / katakana)
+const openbalisehk = "{hk}"
+const endbalisehk = "{/hk}"
 
 export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+
+	// Flag interne (pas encore utilisé mais utile si plus tard)
+	private isFromPlugin: boolean = false;
 
 	async onload() {
-		await this.loadSettings();
 
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (_evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
+		// =======================
+		// Injection du CSS japonais
+		// =======================
 
-		// Perform additional things with the ribbon
+		// Style injecté dynamiquement (évite les conflits de thème)
+		const style = document.createElement("style");
+		style.id = "japanese-render-style";
+		style.textContent = `
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100..900&display=swap');
+
+.japanese-render {
+	font-family: "Noto Sans JP", sans-serif !important;
+	font-optical-sizing: auto !important;
+	font-weight: 10px !important;
+	font-style: normal !important;
+}
+`;
+		document.head.appendChild(style);
+
+		// =======================
+		// Icône dans la sidebar
+		// =======================
+
+		const ribbonIconEl = this.addRibbonIcon(
+			'dice',
+			'Sample Plugin',
+			(_evt: MouseEvent) => {
+				// Click sur l’icône → simple notification
+				new Notice('This is a notice!');
+			}
+		);
+
+		// Classe custom (styling éventuel)
 		ribbonIconEl.addClass('my-plugin-ribbon-class');
 
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
+		// =======================
+		// Status bar (desktop only)
+		// =======================
+
 		const statusBarItemEl = this.addStatusBarItem();
 		statusBarItemEl.setText('Status Bar Text');
 
-		// This adds a simple command that can be triggered anywhere
+		// =======================
+		// Commande : Hiragana
+		// =======================
+
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
+			id: 'insert-hiragana-balise',
+			name: `Insert Hiragana balise (${openbalisehg} ${endbalisehg})`,
+			checkCallback: (check: boolean) => {
+				// On récupère la vue markdown active
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view) return false;
+
+				const editor = view.editor;
+
+				// Exécution réelle (pas juste check)
+				if (!check) {
+					const cursorPos = editor.getCursor();
+
+					// Insertion des balises
+					editor.replaceRange(`${openbalisehg}${endbalisehg}`, cursorPos);
+
+					// Curseur placé entre les balises
+					editor.setCursor({
+						line: cursorPos.line,
+						ch: cursorPos.ch + openbalisehg.length,
+					});
+				}
+				return true;
+			},
+			hotkeys: [
+				{ modifiers: ["Ctrl", "Shift"], key: "H" }
+			]
 		});
 
-		// This adds an editor command that can perform some operation on the current editor instance
+		// =======================
+		// Commande : Katakana
+		// =======================
+
 		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
-			editorCallback: (editor: Editor, _view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
+			id: 'insert-katakana-balise',
+			name: `Insert Katakana balise (${openbalisekk} ${endbalisekk})`,
+			checkCallback: (check: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view) return false;
+
+				const editor = view.editor;
+
+				if (!check) {
+					const cursorPos = editor.getCursor();
+					editor.replaceRange(`${openbalisekk}${endbalisekk}`, cursorPos);
+
+					editor.setCursor({
+						line: cursorPos.line,
+						ch: cursorPos.ch + openbalisekk.length,
+					});
+				}
+				return true;
+			},
+			hotkeys: [
+				{ modifiers: ["Ctrl", "Shift"], key: "K" }
+			]
 		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
+
+		// =======================
+		// Commande : Kana auto
+		// =======================
+
 		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
+			id: 'insert-kana-balise',
+			name: `Insert Kana balise (${openbalisehk} ${endbalisehk})`,
+			checkCallback: (check: boolean) => {
+				const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!view) return false;
+
+				const editor = view.editor;
+
+				if (!check) {
+					const cursorPos = editor.getCursor();
+					editor.replaceRange(`${openbalisehk}${endbalisehk}`, cursorPos);
+
+					editor.setCursor({
+						line: cursorPos.line,
+						ch: cursorPos.ch + openbalisehk.length,
+					});
+				}
+				return true;
+			},
+			hotkeys: [
+				{ modifiers: ["Ctrl", "Alt"], key: "K" }
+			]
+		});
+
+		// =======================
+		// Rendu markdown (preview)
+		// =======================
+
+		this.registerMarkdownPostProcessor(postProcess => {
+
+			// Mapping balise → fonction de conversion
+			const displayMap: Record<string, (text: string) => string> = {
+				hg: toHiragana,
+				kk: toKatakana,
+				hk: toKana
+			};
+
+			// Liste des balises supportées
+			const tags = ["hg", "kk", "hk"];
+
+			// Regex dynamiques par balise
+			const regexes = tags.map(tag => ({
+				tag,
+				regex: new RegExp(`\\{${tag}\\}([\\s\\S]*?)\\{\\/${tag}\\}`, "g")
+			}));
+
+			// Parcours uniquement des nodes texte
+			const walker = document.createTreeWalker(postProcess, NodeFilter.SHOW_TEXT);
+
+			let node;
+			while ((node = walker.nextNode())) {
+				const original = node.nodeValue;
+				if (!original) continue;
+
+				// Remplacement balise → kana
+				for (const { tag, regex } of regexes) {
+					if (regex.test(original)) {
+						node.nodeValue = original.replace(regex, (_, content) => {
+							return displayMap[tag](content);
+						});
 					}
-
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
 				}
 			}
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		// =======================
+		// Live preview (CodeMirror)
+		// =======================
 
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
+		function LivePreviewProcess() {
 
-		this.registerEvent(this.app.workspace.on('editor-change', (editor: Editor, markdownView: MarkdownView) => {
-			const cursor = editor.getCursor();
-			const text = editor.getValue();
-			const where = editor.posToOffset(cursor);
-			
-			const open_balise_pos = text.lastIndexOf("[hg]")+4;
-			const close_balise_pos = text.lastIndexOf("[/hg]");
+			const displayMap: Record<string, (text: string) => string> = {
+				hg: toHiragana,
+				kk: toKatakana,
+				hk: toKana
+			};
 
-			if(open_balise_pos <= where && where <= close_balise_pos) {
-				
-				const content = text.substring(open_balise_pos, close_balise_pos);
-				const result = toKana(content)
-				editor.replaceRange(result, editor.offsetToPos(open_balise_pos), editor.offsetToPos(close_balise_pos));
+			const tags = ["hg", "kk", "hk"];
+			const regexes = tags.map(tag => ({
+				tag,
+				regex: new RegExp(`\\{${tag}\\}([\\s\\S]*?)\\{\\/${tag}\\}`, "g")
+			}));
+
+			return ViewPlugin.fromClass(
+				class {
+					decorations: any;
+
+					constructor(view: EditorView) {
+						this.decorations = this.process(view);
+					}
+
+					update(update: ViewUpdate) {
+						this.decorations = this.process(update.view);
+					}
+
+					process(view: EditorView) {
+						const widgets = [];
+						const text = view.state.doc.toString();
+						const cursorPos = view.state.selection.main.head;
+
+						const matches: { start: number; end: number; display: string }[] = [];
+
+						// Recherche de toutes les balises
+						for (const { tag, regex } of regexes) {
+							let match;
+							while ((match = regex.exec(text)) !== null) {
+								const start = match.index;
+								const end = start + match[0].length;
+
+								// Si le curseur est dedans → on affiche le brut
+								if (cursorPos >= start && cursorPos <= end) continue;
+
+								matches.push({
+									start,
+									end,
+									display: displayMap[tag](match[1])
+								});
+							}
+						}
+
+						// Tri pour éviter les overlaps
+						matches.sort((a, b) => a.start - b.start);
+
+						// Remplacement par widget
+						for (const m of matches) {
+							const deco = Decoration.replace({
+								widget: new LivePreviwWidget(m.display),
+								block: false
+							}).range(m.start, m.end);
+
+							widgets.push(deco);
+						}
+
+						return Decoration.set(widgets);
+					}
+				},
+				{ decorations: v => v.decorations }
+			);
+		}
+
+		// =======================
+		// Widget de rendu kana
+		// =======================
+
+		class LivePreviwWidget extends WidgetType {
+			content: string;
+
+			constructor(content: string) {
+				super();
+				this.content = content;
 			}
-		}))
+
+			toDOM() {
+				const span = document.createElement("span");
+				span.textContent = this.content;
+				span.classList.add("japanese-render");
+				return span;
+			}
+		}
+
+		// Activation du live preview
+		this.registerEditorExtension(LivePreviewProcess());
 	}
 
 	onunload() {
-
-	}
-
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+		// Cleanup si besoin plus tard
 	}
 }

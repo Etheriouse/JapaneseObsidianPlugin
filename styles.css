@@ -1,8 +1,25 @@
-/*
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@100..900&display=swap');
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.japanese-render {
+	font-family: "Noto Sans JP", sans-serif !important;
+	font-optical-sizing: auto !important;
+	font-weight: 10px !important;
+	font-style: normal !important;
+}
 
-If your plugin does not need CSS, delete this file.
+/* Tous les caractères japonais */
+.markdown-preview-view {
+	font-family: "Noto Sans JP", sans-serif !important;
+	font-optical-sizing: auto !important;
+	font-weight: 10px !important;
+	font-style: normal !important;
+}
 
-*/
+.markdown-preview-view span,
+.markdown-preview-view p,
+.markdown-preview-view li {
+	font-family: "Noto Sans JP", sans-serif !important;
+	font-optical-sizing: auto !important;
+	font-weight: 10px !important;
+	font-style: normal !important;
+}
